@@ -17,11 +17,13 @@ if os.environ.get('SPECTRAL_CONNECTIVITY_ENABLE_GPU') == 'true':
         print('Cupy not installed. Cupy is needed to use GPU for '
               'spectral_connectivity.')
         import numpy as xp
-        from scipy.fftpack import fft, fftfreq, ifft, next_fast_len
+        # from scipy.fftpack import fft, fftfreq, ifft, next_fast_len
+        from scipy.fft import fft, fftfreq, ifft, next_fast_len
         from scipy.linalg import lstsq
 else:
     import numpy as xp
-    from scipy.fftpack import fft, fftfreq, ifft, next_fast_len
+    # from scipy.fftpack import fft, fftfreq, ifft, next_fast_len
+    from scipy.fft import fft, fftfreq, ifft, next_fast_len
     from scipy.linalg import lstsq
 
 
@@ -73,7 +75,8 @@ class Multitaper(object):
                  time_window_step=None, n_tapers=None,  tapers=None,
                  start_time=0, n_fft_samples=None,
                  n_time_samples_per_window=None,
-                 n_time_samples_per_step=None, is_low_bias=True):
+                 n_time_samples_per_step=None, is_low_bias=True, fmin=None,
+                 fmax=None, n_jobs=1):
 
         self.time_series = xp.asarray(time_series)
         self.sampling_frequency = sampling_frequency
@@ -88,6 +91,9 @@ class Multitaper(object):
         self._n_tapers = n_tapers
         self._n_time_samples_per_window = n_time_samples_per_window
         self._n_samples_per_time_step = n_time_samples_per_step
+        self._fmin = fmin
+        self._fmax = fmax
+        self._n_jobs = n_jobs
 
     def __repr__(self):
         return (
@@ -163,7 +169,8 @@ class Multitaper(object):
 
     @property
     def frequencies(self):
-        return fftfreq(self.n_fft_samples, 1.0 / self.sampling_frequency)
+        freqs = fftfreq(self.n_fft_samples, 1.0 / self.sampling_frequency)
+        return freqs[self._is_freq()]
 
     @property
     def n_time_samples_per_step(self):
@@ -208,6 +215,17 @@ class Multitaper(object):
     def nyquist_frequency(self):
         return self.sampling_frequency / 2
 
+    def _is_freq(self):
+        # get full frequency range
+        freqs = np.abs(fftfreq(
+            self.n_fft_samples, 1.0 / self.sampling_frequency))
+        keep = np.ones((len(freqs),), dtype=bool)
+        if isinstance(self._fmin, (int, float)):
+            keep[freqs < self._fmin] = False
+        if isinstance(self._fmax, (int, float)):
+            keep[freqs > self._fmax] = False
+        return keep
+
     def fft(self):
         '''Compute the fast Fourier transform using the multitaper method.
 
@@ -227,9 +245,11 @@ class Multitaper(object):
 
         logger.info(self)
 
-        return _multitaper_fft(
+        fcoef =  _multitaper_fft(
             self.tapers, time_series, self.n_fft_samples,
-            self.sampling_frequency).swapaxes(2, -1)
+            self.sampling_frequency, n_jobs=self._n_jobs).swapaxes(2, -1)
+        is_freq = self._is_freq()
+        return fcoef[:, :, :, is_freq, :]
 
 
 def _add_axes(time_series):
@@ -308,7 +328,7 @@ def _sliding_window(data, window_size, step_size=1,
 
 
 def _multitaper_fft(tapers, time_series, n_fft_samples,
-                    sampling_frequency, axis=-2):
+                    sampling_frequency, axis=-2, n_jobs=1):
     '''Projects the data on the tapers and returns the discrete Fourier
     transform
 
@@ -328,8 +348,8 @@ def _multitaper_fft(tapers, time_series, n_fft_samples,
     '''
     projected_time_series = (time_series[..., xp.newaxis] *
                              tapers[xp.newaxis, xp.newaxis, ...])
-    return (fft(projected_time_series, n=n_fft_samples, axis=axis) /
-            sampling_frequency)
+    return (fft(projected_time_series, n=n_fft_samples, axis=axis,
+                workers=n_jobs) / sampling_frequency)
 
 
 def _make_tapers(n_time_samples_per_window, sampling_frequency,
