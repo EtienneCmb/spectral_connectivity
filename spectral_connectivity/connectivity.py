@@ -31,15 +31,18 @@ else:
     from scipy.fft import ifft
     from scipy.sparse.linalg import svds
 
-EXPECTATION = {
-    'time': partial(xp.mean, axis=0),
-    'trials': partial(xp.mean, axis=1),
-    'tapers': partial(xp.mean, axis=2),
-    'time_trials': partial(xp.mean, axis=(0, 1)),
-    'time_tapers': partial(xp.mean, axis=(0, 2)),
-    'trials_tapers': partial(xp.mean, axis=(1, 2)),
-    'time_trials_tapers': partial(xp.mean, axis=(1, 2, 3)),
+
+DIMS = {
+    'time': (0,),
+    'trials': (1,),
+    'tapers': (2,),
+    'time_trials': (0, 1),
+    'time_tapers': (0, 2),
+    'trials_tapers': (1, 2),
+    'time_trials_tapers': (1, 2, 3),
 }
+
+EXPECTATION = {dim: partial(xp.mean, axis=ax) for dim, ax in DIMS.items()}
 
 
 def asnumpy(connectivity_measure):
@@ -212,13 +215,9 @@ class Connectivity:
         else:  # compute blocks of connections
             # get fourier coefficients
             logger.warning("    o Compute fourier coefficients")
-            fourier_coefficients = self.fourier_coefficients[..., xp.newaxis]
+            fourier_coefficients = self.fourier_coefficients
             fourier_coefficients = fourier_coefficients.astype(self._dtype)
-
-            # define sections
-            n_signals = fourier_coefficients.shape[-2]
-            _is, _it = xp.triu_indices(n_signals, k=1)
-            sections = xp.array_split(xp.c_[_is, _it], self._blocks)
+            ndims = fourier_coefficients.ndim
 
             # prepare final output
             csm_shape = list(self._power.shape)
@@ -226,28 +225,26 @@ class Connectivity:
             dtype = self._dtype if dtype is None else dtype
             csm = xp.zeros(csm_shape, dtype=dtype)
 
-            for n_sec, sec in enumerate(sections):
-                # get unique indices
-                _sxu = nonsorted_unique(sec[:, 0])
-                _syu = nonsorted_unique(sec[:, 1])
+            # get dims across which to mean
+            mean_dims = list(DIMS[self.expectation_type]) + [ndims - 1]
+            use_dims = [k for k in range(ndims) if k not in mean_dims]
+            mean_over = [k for k in range(len(DIMS[self.expectation_type]))]
 
-                n_links = len(_sxu) * len(_syu)
+            prod = product(*tuple(range(fourier_coefficients.shape[k]) for k in use_dims))
+            for idx in prod:
+                sl = [slice(None)] * ndims
+                for n_k, k in enumerate(use_dims):
+                    sl[k] = slice(idx[n_k], idx[n_k] + 1)
+                fc_reduce = fourier_coefficients[tuple(sl)].squeeze()[..., np.newaxis]
 
-                logger.warning(f"    o Block #{n_sec} ({n_links} links)")
+                _out = fcn(_complex_inner_product(
+                    fc_reduce, fc_reduce
+                ).mean(axis=tuple(mean_over)))
 
-                # computes block of connections
-                _out = self._expectation(
-                        fcn(
-                            _complex_inner_product(
-                                fourier_coefficients[..., _sxu, :],
-                                fourier_coefficients[..., _syu, :],
-                                dtype=self._dtype)
-                    )
-                )
-
-                # fill the output array (symmetric filling)
-                csm[..., _sxu.reshape(-1, 1), _syu.reshape(1, -1)] = _out
-                csm[..., _syu.reshape(1, -1), _sxu.reshape(-1, 1)] = _out
+                sl = [slice(None)] * csm.ndim
+                for n_k, k in enumerate(idx):
+                    sl[n_k] = slice(k, k + 1)
+                csm[tuple(sl)] = _out
 
         return csm
 
