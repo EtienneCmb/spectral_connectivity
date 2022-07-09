@@ -2,7 +2,7 @@ import os
 from logging import getLogger
 from functools import partial, wraps
 from inspect import signature
-from itertools import combinations
+from itertools import combinations, product
 
 import numpy as np
 from scipy.ndimage import label
@@ -75,9 +75,9 @@ def non_negative_frequencies(axis):
 
 def nonsorted_unique(x):
     """Non-sorted and unique list of elements."""
-    x = np.asarray(x)
-    _, u_idx = np.unique(x, return_index=True)
-    return x[np.sort(u_idx)]
+    x = xp.asarray(x)
+    _, u_idx = xp.unique(x, return_index=True)
+    return x[xp.sort(u_idx)]
 
 
 
@@ -224,14 +224,16 @@ class Connectivity:
             csm_shape = list(self._power.shape)
             csm_shape += [csm_shape[-1]]
             dtype = self._dtype if dtype is None else dtype
-            csm = np.zeros(csm_shape, dtype=dtype)
+            csm = xp.zeros(csm_shape, dtype=dtype)
 
             for n_sec, sec in enumerate(sections):
                 # get unique indices
                 _sxu = nonsorted_unique(sec[:, 0])
                 _syu = nonsorted_unique(sec[:, 1])
 
-                logger.warning(f"    o Block #{n_sec} ({len(_sxu)} links)")
+                n_links = len(_sxu) * len(_syu)
+
+                logger.warning(f"    o Block #{n_sec} ({n_links} links)")
 
                 # computes block of connections
                 _out = self._expectation(
@@ -277,7 +279,7 @@ class Connectivity:
         if isinstance(axes, int):
             return self.fourier_coefficients.shape[axes]
         else:
-            return np.prod(
+            return xp.prod(
                 [self.fourier_coefficients.shape[axis]
                  for axis in axes])
 
