@@ -1,4 +1,5 @@
 import os
+from logging import getLogger
 from functools import partial, wraps
 from inspect import signature
 from itertools import combinations
@@ -12,6 +13,9 @@ from spectral_connectivity.statistics import (adjust_for_multiple_comparisons,
                                               coherence_bias,
                                               fisher_z_transform,
                                               get_normal_distribution_p_values)
+
+logger = getLogger(__name__)
+
 
 if os.environ.get('SPEC_CON_ENABLE_GPU') == 'true':
     try:
@@ -207,6 +211,7 @@ class Connectivity:
             return self._expectation(fcn(self._cross_spectral_matrix))
         else:  # compute blocks of connections
             # get fourier coefficients
+            logger.warning("    o Compute fourier coefficients")
             fourier_coefficients = self.fourier_coefficients[..., xp.newaxis]
             fourier_coefficients = fourier_coefficients.astype(self._dtype)
 
@@ -221,7 +226,8 @@ class Connectivity:
             dtype = self._dtype if dtype is None else dtype
             csm = np.zeros(csm_shape, dtype=dtype)
 
-            for sec in sections:
+            for n_sec, sec in enumerate(sections):
+                logger.warning(f"    o Block #{n_sec}")
                 # get unique indices
                 _sxu = nonsorted_unique(sec[:, 0])
                 _syu = nonsorted_unique(sec[:, 1])
