@@ -76,7 +76,7 @@ class Multitaper(object):
                  start_time=0, n_fft_samples=None,
                  n_time_samples_per_window=None,
                  n_time_samples_per_step=None, is_low_bias=True, fmin=None,
-                 fmax=None, n_jobs=1):
+                 fmax=None, fskip=None, freqs=None, n_jobs=1):
 
         self.time_series = xp.asarray(time_series)
         self.sampling_frequency = sampling_frequency
@@ -93,6 +93,8 @@ class Multitaper(object):
         self._n_samples_per_time_step = n_time_samples_per_step
         self._fmin = fmin
         self._fmax = fmax
+        self._fskip = fskip
+        self._freqs = freqs
         self._n_jobs = n_jobs
 
     def __repr__(self):
@@ -191,10 +193,12 @@ class Multitaper(object):
     def time(self):
         original_time = (xp.arange(0, self.time_series.shape[0]) /
                          self.sampling_frequency)
-        window_start_time = _sliding_window(
+        window_start = _sliding_window(
             original_time, self.n_time_samples_per_window,
-            self.n_time_samples_per_step)[:, 0]
-        return self.start_time + window_start_time
+            self.n_time_samples_per_step)
+        # use middle time point
+        window_start = (window_start[:, 0] + window_start[:, -1]) / 2.
+        return self.start_time + window_start
 
     @property
     def n_signals(self):
@@ -217,13 +221,18 @@ class Multitaper(object):
 
     def _is_freq(self):
         # get full frequency range
-        freqs = np.abs(fftfreq(
-            self.n_fft_samples, 1.0 / self.sampling_frequency))
+        freqs = fftfreq(
+            self.n_fft_samples, 1.0 / self.sampling_frequency)
         keep = np.ones((len(freqs),), dtype=bool)
+        keep[freqs < 0] = False
         if isinstance(self._fmin, (int, float)):
             keep[freqs < self._fmin] = False
         if isinstance(self._fmax, (int, float)):
             keep[freqs > self._fmax] = False
+        if isinstance(self._fskip, int) and (self._fskip > 1):
+            keep_skip = np.zeros((len(freqs),), dtype=bool)
+            keep_skip[::self._fskip] = True
+            keep = np.c_[keep, keep_skip].all(1)
         return keep
 
     def fft(self):

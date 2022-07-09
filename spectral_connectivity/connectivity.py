@@ -66,12 +66,13 @@ def non_negative_frequencies(axis):
         @wraps(connectivity_measure)
         def wrapper(*args, **kwargs):
             measure = connectivity_measure(*args, **kwargs)
-            if measure is not None:
-                n_frequencies = measure.shape[axis]
-                non_neg_index = xp.arange(0, (n_frequencies + 1) // 2)
-                return xp.take(measure, indices=non_neg_index, axis=axis)
-            else:
-                return None
+            return measure
+            # if measure is not None:
+            #     n_frequencies = measure.shape[axis]
+            #     non_neg_index = xp.arange(0, (n_frequencies + 1) // 2)
+            #     return xp.take(measure, indices=non_neg_index, axis=axis)
+            # else:
+            #     return None
         return wrapper
     return decorator
 
@@ -144,12 +145,14 @@ class Connectivity:
 
     def __init__(self, fourier_coefficients,
                  expectation_type='trials_tapers', frequencies=None,
-                 time=None, blocks=None, dtype=xp.complex128):
+                 time=None, blocks=None, block_strategy='blocks',
+                 dtype=xp.complex128):
         self.fourier_coefficients = fourier_coefficients
         self.expectation_type = expectation_type
         self._frequencies = frequencies
         self._blocks = blocks
         self._dtype = dtype
+        self._block_strategy = block_strategy
         try:
             self.time = xp.asnumpy(time)
         except AttributeError:
@@ -158,14 +161,14 @@ class Connectivity:
     @classmethod
     def from_multitaper(
             cls, multitaper_instance, expectation_type='trials_tapers',
-            blocks=None, dtype=xp.complex128):
+            blocks=None, block_strategy='blocks', dtype=xp.complex128):
         '''Construct connectivity class using a multitaper instance'''
         return cls(
             fourier_coefficients=multitaper_instance.fft(),
             expectation_type=expectation_type,
             time=multitaper_instance.time,
             frequencies=multitaper_instance.frequencies,
-            blocks=blocks, dtype=dtype
+            blocks=blocks, block_strategy=block_strategy, dtype=dtype
         )
 
     @property
@@ -213,38 +216,78 @@ class Connectivity:
             # compute all connections at once
             return self._expectation(fcn(self._cross_spectral_matrix))
         else:  # compute blocks of connections
-            # get fourier coefficients
-            logger.warning("    o Compute fourier coefficients")
-            fourier_coefficients = self.fourier_coefficients
-            fourier_coefficients = fourier_coefficients.astype(self._dtype)
-            ndims = fourier_coefficients.ndim
+            if self._block_strategy == 'loop':
+                # get fourier coefficients
+                logger.warning("    o Compute fourier coefficients")
+                fourier_coefficients = self.fourier_coefficients
+                fourier_coefficients = fourier_coefficients.astype(self._dtype)
+                ndims = fourier_coefficients.ndim
 
-            # prepare final output
-            csm_shape = list(self._power.shape)
-            csm_shape += [csm_shape[-1]]
-            dtype = self._dtype if dtype is None else dtype
-            csm = xp.zeros(csm_shape, dtype=dtype)
+                # prepare final output
+                csm_shape = list(self._power.shape)
+                csm_shape += [csm_shape[-1]]
+                dtype = self._dtype if dtype is None else dtype
+                csm = xp.zeros(csm_shape, dtype=dtype)
 
-            # get dims across which to mean
-            mean_dims = list(DIMS[self.expectation_type]) + [ndims - 1]
-            use_dims = [k for k in range(ndims) if k not in mean_dims]
-            mean_over = [k for k in range(len(DIMS[self.expectation_type]))]
+                # get dims across which to mean
+                mean_dims = list(DIMS[self.expectation_type]) + [ndims - 1]
+                use_dims = [k for k in range(ndims) if k not in mean_dims]
+                mean_over = [k for k in range(len(DIMS[self.expectation_type]))]
 
-            prod = product(*tuple(range(fourier_coefficients.shape[k]) for k in use_dims))
-            for idx in prod:
-                sl = [slice(None)] * ndims
-                for n_k, k in enumerate(use_dims):
-                    sl[k] = slice(idx[n_k], idx[n_k] + 1)
-                fc_reduce = fourier_coefficients[tuple(sl)].squeeze()[..., np.newaxis]
+                prod = product(*tuple(range(
+                    fourier_coefficients.shape[k]) for k in use_dims))
+                for idx in prod:
+                    sl = [slice(None)] * ndims
+                    for n_k, k in enumerate(use_dims):
+                        sl[k] = slice(idx[n_k], idx[n_k] + 1)
+                    fc_reduce = fourier_coefficients[
+                        tuple(sl)].squeeze()[..., np.newaxis]
 
-                _out = fcn(_complex_inner_product(
-                    fc_reduce, fc_reduce
-                ).mean(axis=tuple(mean_over)))
+                    _out = fcn(_complex_inner_product(
+                        fc_reduce, fc_reduce
+                    ).mean(axis=tuple(mean_over)))
 
-                sl = [slice(None)] * csm.ndim
-                for n_k, k in enumerate(idx):
-                    sl[n_k] = slice(k, k + 1)
-                csm[tuple(sl)] = _out
+                    sl = [slice(None)] * csm.ndim
+                    for n_k, k in enumerate(idx):
+                        sl[n_k] = slice(k, k + 1)
+                    csm[tuple(sl)] = _out
+            if self._block_strategy == 'blocks':
+                # get fourier coefficients
+                logger.warning("    o Compute fourier coefficients")
+                fourier_coefficients = self.fourier_coefficients[..., xp.newaxis]
+                fourier_coefficients = fourier_coefficients.astype(self._dtype)
+
+                # define sections
+                n_signals = fourier_coefficients.shape[-2]
+                _is, _it = xp.triu_indices(n_signals, k=1)
+                sections = xp.array_split(xp.c_[_is, _it], self._blocks)
+
+                # prepare final output
+                csm_shape = list(self._power.shape)
+                csm_shape += [csm_shape[-1]]
+                dtype = self._dtype if dtype is None else dtype
+                csm = np.zeros(csm_shape, dtype=dtype)
+
+                for n_sec, sec in enumerate(sections):
+                    # get unique indices
+                    _sxu = nonsorted_unique(sec[:, 0])
+                    _syu = nonsorted_unique(sec[:, 1])
+
+                    logger.warning(f"    o Block #{n_sec} ({len(_sxu)} links)")
+
+                    # computes block of connections
+                    _out = self._expectation(
+                            fcn(
+                                _complex_inner_product(
+                                    fourier_coefficients[..., _sxu, :],
+                                    fourier_coefficients[..., _syu, :],
+                                    dtype=self._dtype)
+                        )
+                    )
+
+                    # fill the output array (symmetric filling)
+                    csm[..., _sxu.reshape(-1, 1), _syu.reshape(1, -1)] = _out
+                    csm[..., _syu.reshape(1, -1), _sxu.reshape(-1, 1)] = _out
 
         return csm
 
