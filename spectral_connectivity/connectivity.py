@@ -227,10 +227,11 @@ class Connectivity:
             csm = np.zeros(csm_shape, dtype=dtype)
 
             for n_sec, sec in enumerate(sections):
-                logger.warning(f"    o Block #{n_sec}")
                 # get unique indices
                 _sxu = nonsorted_unique(sec[:, 0])
                 _syu = nonsorted_unique(sec[:, 1])
+
+                logger.warning(f"    o Block #{n_sec} ({len(_sxu)} links)")
 
                 # computes block of connections
                 _out = self._expectation(
