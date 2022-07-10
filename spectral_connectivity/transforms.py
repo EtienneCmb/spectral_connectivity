@@ -235,7 +235,7 @@ class Multitaper(object):
             keep = np.c_[keep, keep_skip].all(1)
         return keep
 
-    def fft(self):
+    def fft(self, signals=None):
         '''Compute the fast Fourier transform using the multitaper method.
 
         Returns
@@ -245,7 +245,9 @@ class Multitaper(object):
                                              n_signals)
 
         '''
-        time_series = _add_axes(self.time_series)
+        if signals is None:
+            signals = slice(None)
+        time_series = _add_axes(self.time_series[..., signals])
         time_series = _sliding_window(
             time_series, window_size=self.n_time_samples_per_window,
             step_size=self.n_time_samples_per_step, axis=0)
