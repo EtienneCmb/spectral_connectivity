@@ -208,7 +208,8 @@ class Connectivity:
             sections = xp.array_split(xp.arange(self._n_signals), self._blocks)
 
             __power = []
-            for sec in sections:
+            pbar = tqdm(sections, desc="Block wise power")
+            for sec in pbar:
                 fcoef = self._multitaper.fft(signals=sec)
                 __power.append(
                     self._expectation(fcoef * fcoef.conjugate()).real)
