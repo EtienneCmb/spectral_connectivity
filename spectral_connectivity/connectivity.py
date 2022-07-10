@@ -249,9 +249,14 @@ class Connectivity:
             _is, _it = xp.triu_indices(self._n_signals, k=1)
             sections = xp.array_split(xp.c_[_is, _it], self._blocks)
 
+            # get the dimensions across which to mean
+            fcoef_sh = list(self._multitaper.fft(signals=[0]).shape)[0:-1]
+            mean_dims = DIMS[self.expectation_type]
+
             # prepare final output
-            csm_shape = list(self._power.shape)
-            csm_shape += [csm_shape[-1]]
+            csm_shape = [fcoef_sh[n_k] for n_k in range(
+                len(fcoef_sh)) if n_k not in mean_dims]
+            csm_shape += [self._n_signals] * 2
             dtype = self._dtype if dtype is None else dtype
             csm = np.zeros(csm_shape, dtype=dtype)
 
@@ -331,8 +336,10 @@ class Connectivity:
                                            n_signals)
 
          '''
-        norm = xp.sqrt(self._power[..., :, xp.newaxis] *
-                       self._power[..., xp.newaxis, :])
+        # get the power
+        __power = self._power
+        norm = xp.sqrt(__power[..., :, xp.newaxis] *
+                       __power[..., xp.newaxis, :])
         norm[norm == 0] = xp.nan
         complex_coherencey = self._expectation_cross_spectral_matrix() / norm
         diagonal_ind = xp.arange(0, self._n_signals)
