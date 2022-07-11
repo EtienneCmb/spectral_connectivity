@@ -245,10 +245,31 @@ class Connectivity:
             # compute all connections at once
             return self._expectation(fcn(self._cross_spectral_matrix))
         else:  # compute blocks of connections
-            # define sections
-            _is, _it = xp.triu_indices(self._n_signals, k=1)
-            sections = xp.array_split(xp.c_[_is, _it], self._blocks)
+            # ---------------------------- SECTIONS ---------------------------
+            # upper square matrix
+            mat = np.full((self._n_signals, self._n_signals), np.nan)
+            _ix, _iy = np.triu_indices_from(mat, k=1)
+            mat[_ix, _iy] = np.arange(len(_ix))
 
+            # find ideal number of blocks (k**2 - k - 2*n_signals = 0)
+            delta = 1 + 8 * self._blocks
+            s1 = (-1 + np.sqrt(delta)) / 2
+            half_blocks = int(np.round(s1))
+
+            # identify section
+            squares = []
+            hor_div = np.array_split(mat, half_blocks, axis=0)
+            for k in hor_div:
+                vert_div = np.array_split(k, half_blocks, axis=1)
+
+                for sec in vert_div:
+                    sec = sec.ravel()
+                    if not np.all(np.isnan(sec)):
+                        squares.append(sec[~np.isnan(sec)].astype(int))
+
+            sections = [np.c_[_ix[k], _iy[k]] for k in squares]
+
+            # ----------------------------- OUTPUT ----------------------------
             # get the dimensions across which to mean
             fcoef_sh = list(self._multitaper.fft(signals=[0]).shape)[0:-1]
             mean_dims = DIMS[self.expectation_type]
